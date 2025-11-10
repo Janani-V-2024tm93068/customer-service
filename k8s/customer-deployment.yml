@@ -1,0 +1,169 @@
+# -------------------------------
+# Secret for Customer DB
+# -------------------------------
+apiVersion: v1
+kind: Secret
+metadata:
+  name: customer-db-secret
+type: Opaque
+data:
+  POSTGRES_USER: Y3VzdG9tZXJ1c2Vy       # base64 of "customeruser"
+  POSTGRES_PASSWORD: Y3VzdG9tZXJwYXNz   # base64 of "customerpass"
+  POSTGRES_DB: Y3VzdG9tZXJkYg==         # base64 of "customerdb"
+
+---
+# -------------------------------
+# PVC for Customer DB
+# -------------------------------
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: customer-db-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+
+---
+# -------------------------------
+# Customer DB Deployment
+# -------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: customer-db
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: customer-db
+  template:
+    metadata:
+      labels:
+        app: customer-db
+    spec:
+      containers:
+        - name: customer-db
+          image: postgres:15
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: customer-db-secret
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: customer-db-secret
+                  key: POSTGRES_PASSWORD
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: customer-db-secret
+                  key: POSTGRES_DB
+          volumeMounts:
+            - name: customer-db-storage
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -U
+                - "$(POSTGRES_USER)"
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      volumes:
+        - name: customer-db-storage
+          persistentVolumeClaim:
+            claimName: customer-db-pvc
+
+---
+# -------------------------------
+# Customer DB Service
+# -------------------------------
+apiVersion: v1
+kind: Service
+metadata:
+  name: customer-db
+spec:
+  type: ClusterIP
+  ports:
+    - port: 5432
+  selector:
+    app: customer-db
+
+---
+# -------------------------------
+# Customer Service Deployment
+# -------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: customer-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: customer-service
+  template:
+    metadata:
+      labels:
+        app: customer-service
+    spec:
+      containers:
+        - name: customer-service
+          image: customer-service:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8081
+          env:
+            - name: DB_HOST
+              value: customer-db
+            - name: DB_PORT
+              value: "5432"
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: customer-db-secret
+                  key: POSTGRES_USER
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: customer-db-secret
+                  key: POSTGRES_PASSWORD
+            - name: DB_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: customer-db-secret
+                  key: POSTGRES_DB
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8081
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8081
+            initialDelaySeconds: 5
+            periodSeconds: 10
+
+---
+# -------------------------------
+# Customer Service ClusterIP
+# -------------------------------
+apiVersion: v1
+kind: Service
+metadata:
+  name: customer-service
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8081
+  selector:
+    app: customer-service
